@@ -1,3 +1,5 @@
+Python
+
 from datetime import datetime, date, time
 from pathlib import Path
 import urllib.request
@@ -87,8 +89,11 @@ with col5:
     )
 
 
-if st.button("Analyze My Route", type="primary",
-             use_container_width=True):
+if st.button(
+    "Analyze My Route",
+    type="primary",
+    use_container_width=True
+):
 
     if not source.strip() or not destination.strip():
         st.warning("Please enter both locations.")
@@ -144,9 +149,7 @@ if st.button("Analyze My Route", type="primary",
                     elif i == 6:
                         place = destination_data["name"].split(",")[0]
                     else:
-                         place = f"Route checkpoint {i + 1}"
-                            
-                        )
+                        place = f"Route checkpoint {i + 1}"
 
                     if place in used_names:
                         place = (
