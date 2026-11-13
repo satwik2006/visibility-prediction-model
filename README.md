@@ -1,3 +1,4 @@
+<img width="1366" height="768" alt="dashboard" src="https://github.com/user-attachments/assets/14b05002-dd75-4150-b750-2bee23dfcd84" />
 # Visibility Prediction Model — Real Dataset Edition
 
 A Flask-based travel visibility assistant powered by machine-learning models trained using the **Global Weather Repository** dataset.
