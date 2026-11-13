@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Plan a safer journey with route-wise visibility and weather guidance.">
+  <title>RouteVision · Safer Journey Planner</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/style.css') }}">
+</head>
+<body>
+<header class="navbar no-print">
+  <a class="brand" href="/"><span class="brand-mark">RV</span><span>RouteVision</span></a>
+  <nav><a href="#planner">Plan Journey</a><a href="#results">Route Report</a><a href="/about">About Project</a><button id="theme" class="icon-btn" aria-label="Toggle theme">☾</button></nav>
+</header>
+<main>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">SMART TRAVEL GUIDANCE</p>
+      <h1>Travel smarter.<br><span>Know the route before you leave.</span></h1>
+      <p class="hero-copy">Check predicted visibility, weather conditions and safer travel guidance for important places along your journey.</p>
+      <a class="hero-action" href="#planner">Plan your journey</a>
+    </div>
+    <div class="travel-visual">
+      <div class="sun">☀</div><div class="route-line"></div>
+      <div class="location-card start"><b>Source</b><span>Start your route</span></div>
+      <div class="location-card end"><b>Destination</b><span>Travel with confidence</span></div>
+    </div>
+  </section>
+
+  <section id="planner" class="panel planner no-print">
+    <div class="section-heading"><div><p class="eyebrow">JOURNEY PLANNER</p><h2>Where are you travelling?</h2></div><span id="liveClock"></span></div>
+    <div class="form-grid">
+      <label>From<input id="source" value="Prayagraj" autocomplete="off" placeholder="Enter source city"></label>
+      <label>To<input id="destination" value="Varanasi" autocomplete="off" placeholder="Enter destination city"></label>
+      <label>Vehicle<select id="vehicle"><option>Car</option><option>Bike</option><option>Bus</option><option>Walking</option></select></label>
+      <label>Departure<input id="departure" type="datetime-local"></label>
+    </div>
+    <div class="action-row"><button id="swap" class="secondary">⇄ Swap places</button><button id="analyze" class="primary">Analyse Journey</button></div>
+    <p id="status" class="status" role="status"></p>
+  </section>
+
+  <section id="results" class="hidden report-root">
+    <div class="report-header print-only"><p>ROUTEVISION</p><h1>Journey Safety Report</h1><div id="printMeta"></div></div>
+    <section class="summary-grid">
+      <article class="summary-card accent"><span>Travel recommendation</span><b id="decision">—</b><small id="decisionReason">—</small></article>
+      <article class="summary-card"><span>Route visibility</span><b id="visibility">—</b><small>Predicted route average</small></article>
+      <article class="summary-card"><span>Safety</span><b id="score">—</b><small>Route safety score</small></article>
+      <article class="summary-card"><span>Travel risk</span><b id="risk">—</b><small>Highest route risk</small></article>
+      <article class="summary-card"><span>Prediction confidence</span><b id="confidence">—</b><small>Model confidence</small></article>
+    </section>
+
+    <section class="panel explain-section">
+      <div class="section-heading"><div><p class="eyebrow">WHY THIS RESULT?</p><h2>Easy explanation</h2></div></div>
+      <div id="reasonList" class="reason-list"></div>
+      <div class="recommendation-box"><span>Recommendation</span><b id="suggestion">—</b></div>
+      <div class="factor-grid"><div><span>Average rain</span><b id="avgRain">—</b></div><div><span>Average humidity</span><b id="avgHumidity">—</b></div><div><span>Average AQI</span><b id="avgAqi">—</b></div><div><span>Most sensitive place</span><b id="highestRisk">—</b></div></div>
+      <div class="progress"><i id="bar"></i></div>
+      <p id="disclaimer" class="disclaimer"></p>
+    </section>
+
+    <section class="panel map-section">
+      <div class="section-heading"><div><p class="eyebrow">ROUTE OVERVIEW</p><h2>Places along your journey</h2></div><span id="routeMeta"></span></div>
+      <div id="map"><div class="map-fallback">Map loading…</div></div><p id="routeNote" class="note"></p>
+    </section>
+
+    <section class="chart-grid">
+      <article class="panel"><h2>Visibility along the route</h2><canvas id="visibilityChart"></canvas></article>
+      <article class="panel"><h2>Rain and wind conditions</h2><canvas id="environmentChart"></canvas></article>
+    </section>
+
+    <section class="panel checkpoint-section">
+      <div class="section-heading"><div><p class="eyebrow">PLACE-WISE CONDITIONS</p><h2>Detailed journey analysis</h2></div><div class="no-print"><button id="download" class="secondary">Download report</button><button id="print" class="primary">Print / Save PDF</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Place</th><th>Distance</th><th>Temp.</th><th>Humidity</th><th>Rain</th><th>Visibility</th><th>Risk</th><th>Reason</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+  </section>
+</main>
+<footer>Developed by Satwik Shukla · B.Tech AI & ML Final-Year Project</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static',filename='js/app.js') }}"></script>
+</body></html>

@@ -1,0 +1,65 @@
+{
+  "dataset": "Global Weather Repository (real-world daily weather observations)",
+  "dataset_file": "GlobalWeatherRepository.csv",
+  "source": "Kaggle - Global Weather Repository by Nelgiriyewithana",
+  "rows_original": 154556,
+  "rows_used": 54612,
+  "ml_dependency_estimate": "Approximately 80%+ of core prediction and decision logic",
+  "deployed_models": {
+    "visibility": "Random Forest",
+    "risk": "Random Forest Classifier",
+    "safety_score": "Gradient Boosting Regressor",
+    "departure_recommendation": "Gradient Boosting Classifier",
+    "confidence": "Classifier probability + held-out regression error calibration"
+  },
+  "visibility_model_comparison": {
+    "Linear Regression": {
+      "MAE": 2.7333,
+      "RMSE": 4.1719,
+      "R2": 0.1193
+    },
+    "Decision Tree": {
+      "MAE": 1.7863,
+      "RMSE": 3.0508,
+      "R2": 0.529
+    },
+    "Random Forest": {
+      "MAE": 1.633,
+      "RMSE": 2.5802,
+      "R2": 0.6631
+    },
+    "Gradient Boosting": {
+      "MAE": 2.2225,
+      "RMSE": 3.1969,
+      "R2": 0.4829
+    }
+  },
+  "auxiliary_metrics": {
+    "risk_classifier": {
+      "accuracy": 0.8017,
+      "weighted_f1": 0.8
+    },
+    "safety_regressor": {
+      "MAE": 6.327,
+      "RMSE": 9.6618,
+      "R2": 0.6345
+    },
+    "departure_classifier": {
+      "accuracy": 0.807,
+      "weighted_f1": 0.8017
+    }
+  },
+  "features": [
+    "temperature",
+    "humidity",
+    "pressure",
+    "wind_speed",
+    "precipitation",
+    "cloud_cover",
+    "aqi",
+    "hour",
+    "month"
+  ],
+  "target": "visibility_km",
+  "note": "Visibility is an observed dataset column. Risk, safety and departure labels are engineered from observed visibility and recorded environmental conditions for educational decision-support modelling."
+}
