@@ -34,3 +34,9 @@ This is an educational project, not a substitute for official weather or road-sa
 - Visibility remains predicted by the trained ML model.
 - Travel risk uses transparent weighted thresholds: visibility 45%, rain 25%, wind 15%, fog/storm indicators 10%, departure time 5%.
 - Technical model comparison is available only on the About Project page.
+
+
+## 🚀 Live Demo
+
+[Click Here to Open RouteVision]
+(https://visibility-prediction-model-423jx9ov3fs2fzzwhqr9yq.streamlit.app/)
