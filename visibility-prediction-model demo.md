@@ -10,7 +10,5 @@
 
 
 
-[Video Demonstration]
-
-(https://github.com/user-attachments/assets/d1a30dbd-319c-4380-a965-6c9eff38fe0a)
+![Video Demonstration](https://github.com/user-attachments/assets/d1a30dbd-319c-4380-a965-6c9eff38fe0a)
 
