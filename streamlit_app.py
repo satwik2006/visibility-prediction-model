@@ -144,8 +144,8 @@ if st.button("Analyze My Route", type="primary",
                     elif i == 6:
                         place = destination_data["name"].split(",")[0]
                     else:
-                        place = backend.reverse_geocode(
-                            lat, lon, f"Route Point {i + 1}"
+                         place = f"Route checkpoint {i + 1}"
+                            
                         )
 
                     if place in used_names:
