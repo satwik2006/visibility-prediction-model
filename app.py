@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from functools import lru_cache
 import json
 import math
+import time
+import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -40,6 +44,10 @@ KNOWN_LOCATIONS = {
     "ayodhya": (26.7922, 82.1998, "Ayodhya, Uttar Pradesh, India"),
 }
 
+# Nominatim's public service asks clients to stay at or below one request/second.
+_NOMINATIM_LOCK = threading.Lock()
+_LAST_NOMINATIM_CALL = 0.0
+
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -57,12 +65,13 @@ def _probability_confidence(model, frame: pd.DataFrame) -> float:
 
 
 def _visibility_confidence(row: dict[str, float], prediction: float) -> float:
-    """ML-derived uncertainty using Random Forest tree dispersion or calibrated error."""
+    """Estimate uncertainty from tree dispersion or the bundle's calibrated errors."""
     model = VISIBILITY_MODEL.named_steps.get("model")
-    transformed = row_frame = _frame(row, FEATURES)
+    row_frame = _frame(row, FEATURES)
+    transformed = row_frame
     imputer = VISIBILITY_MODEL.named_steps.get("imputer")
     if imputer is not None:
-        transformed = imputer.transform(row_frame)
+        transformed = imputer.transform(transformed)
     scaler = VISIBILITY_MODEL.named_steps.get("scaler")
     if scaler is not None:
         transformed = scaler.transform(transformed)
@@ -73,7 +82,6 @@ def _visibility_confidence(row: dict[str, float], prediction: float) -> float:
     else:
         q50 = max(float(BUNDLE.get("confidence_error_q50", 0.7)), 0.05)
         q90 = max(float(BUNDLE.get("confidence_error_q90", 1.8)), q50)
-        # Confidence decreases near difficult low-visibility conditions.
         spread = q50 + max(0, 6 - prediction) / 6 * (q90 - q50)
     return clamp(1.0 - spread / max(prediction + 2.0, 4.0), 0.55, 0.97)
 
@@ -93,7 +101,9 @@ def predict_one(data: dict) -> dict:
     risk_conf = _probability_confidence(RISK_MODEL, aux_frame)
     departure_conf = _probability_confidence(DEPARTURE_MODEL, aux_frame)
     vis_conf = _visibility_confidence(row, visibility)
-    confidence = int(round(clamp((risk_conf * 0.35 + departure_conf * 0.25 + vis_conf * 0.40) * 100, 55, 97)))
+    confidence = int(round(clamp(
+        (risk_conf * 0.35 + departure_conf * 0.25 + vis_conf * 0.40) * 100, 55, 97
+    )))
 
     return {
         "predicted_visibility_km": visibility,
@@ -111,30 +121,78 @@ def predict_one(data: dict) -> dict:
 
 
 def fetch_json(url: str) -> dict | list:
-    req = urllib.request.Request(url, headers={"User-Agent": "VisibilityPredictionModel/3.0 educational-project"})
-    with urllib.request.urlopen(req, timeout=12) as response:
-        return json.load(response)
+    """Fetch JSON with bounded retries for temporary rate limits and network errors."""
+    global _LAST_NOMINATIM_CALL
+
+    is_nominatim = "nominatim.openstreetmap.org" in url.lower()
+    if is_nominatim:
+        # Serialize Nominatim calls and maintain at least 1.1 seconds between requests.
+        with _NOMINATIM_LOCK:
+            wait = 1.1 - (time.monotonic() - _LAST_NOMINATIM_CALL)
+            if wait > 0:
+                time.sleep(wait)
+            _LAST_NOMINATIM_CALL = time.monotonic()
+            return _request_json_with_retries(url)
+
+    return _request_json_with_retries(url)
 
 
+def _request_json_with_retries(url: str) -> dict | list:
+    headers = {
+        "User-Agent": "RouteVisionVisibilityProject/3.1 (educational use)"
+    }
+    last_error = None
+
+    for attempt in range(3):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            try:
+                delay = float(retry_after) if retry_after else 2 ** (attempt + 1)
+            except (TypeError, ValueError):
+                delay = 2 ** (attempt + 1)
+            time.sleep(min(max(delay, 1.0), 8.0))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = exc
+            if attempt == 2:
+                raise
+            time.sleep(1.5 * (attempt + 1))
+
+    raise last_error or RuntimeError("Unable to fetch data.")
+
+
+@lru_cache(maxsize=256)
 def geocode(text: str) -> dict:
     cleaned = text.strip().lower()
     for key, (lat, lon, name) in KNOWN_LOCATIONS.items():
         if cleaned == key or cleaned.startswith(key + ","):
             return {"name": name, "lat": lat, "lon": lon, "source": "local-fallback"}
-    query = urllib.parse.urlencode({"q": text, "format": "jsonv2", "limit": 1, "countrycodes": "in"})
+
+    query = urllib.parse.urlencode({
+        "q": text, "format": "jsonv2", "limit": 1, "countrycodes": "in"
+    })
     data = fetch_json("https://nominatim.openstreetmap.org/search?" + query)
     if not data:
         raise ValueError(f"Location not found: {text}")
     return {
-        "name": data[0]["display_name"], "lat": float(data[0]["lat"]),
-        "lon": float(data[0]["lon"]), "source": "OpenStreetMap Nominatim",
+        "name": data[0]["display_name"],
+        "lat": float(data[0]["lat"]),
+        "lon": float(data[0]["lon"]),
+        "source": "OpenStreetMap Nominatim",
     }
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     radius = 6371
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * radius * math.asin(math.sqrt(a))
 
@@ -162,12 +220,18 @@ def weather(lat: float, lon: float, index: int, departure: datetime) -> dict:
         "timezone": "auto",
     }
     try:
-        current = fetch_json("https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params))["current"]
+        url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
+        current = fetch_json(url)["current"]
         return {
-            "temperature": current["temperature_2m"], "humidity": current["relative_humidity_2m"],
-            "pressure": current["surface_pressure"], "wind_speed": current["wind_speed_10m"],
-            "precipitation": current["precipitation"], "cloud_cover": current["cloud_cover"],
-            "aqi": 75 + index * 4, "hour": departure.hour, "month": departure.month,
+            "temperature": current["temperature_2m"],
+            "humidity": current["relative_humidity_2m"],
+            "pressure": current["surface_pressure"],
+            "wind_speed": current["wind_speed_10m"],
+            "precipitation": current["precipitation"],
+            "cloud_cover": current["cloud_cover"],
+            "aqi": 75 + index * 4,
+            "hour": departure.hour,
+            "month": departure.month,
             "data_source": "Open-Meteo live weather",
         }
     except Exception:
@@ -175,7 +239,7 @@ def weather(lat: float, lon: float, index: int, departure: datetime) -> dict:
 
 
 def reverse_geocode(lat: float, lon: float, fallback: str) -> str:
-    """Return a short, human-readable locality name for a route point."""
+    """Optional locality lookup; route analysis no longer calls this for every checkpoint."""
     try:
         query = urllib.parse.urlencode({
             "lat": lat, "lon": lon, "format": "jsonv2", "zoom": 10,
@@ -230,7 +294,6 @@ def wind_risk_points(wind: float) -> tuple[int, str]:
 def condition_risk_points(features: dict, visibility: float) -> tuple[int, str]:
     humidity = float(features["humidity"])
     cloud = float(features["cloud_cover"])
-    # Humidity/cloud are supporting factors only. They matter when visibility is already poor.
     if visibility < 1 and humidity >= 90:
         return 80, "High humidity with low visibility indicates possible fog."
     if visibility < 2 and humidity >= 85:
@@ -258,10 +321,10 @@ def explain_checkpoint(features: dict, visibility: float, risk_level: str) -> tu
     ]
     important = sorted(checks, key=lambda x: x[0], reverse=True)
     if risk_level == "Low":
-        reasons = [text for score, text in important if score <= 10][:3]
+        reasons = [message for score, message in important if score <= 10][:3]
         reason = " ".join(reasons[:2]) or "Weather conditions are suitable for travel."
     else:
-        reasons = [text for score, text in important if score >= 20][:3]
+        reasons = [message for score, message in important if score >= 20][:3]
         reason = " ".join(reasons[:2]) or "Some route conditions require attention."
     return reason, reasons
 
@@ -285,50 +348,59 @@ def safety_from_rules(features: dict, visibility: float) -> dict:
     else:
         risk = "Very High"
     reason, reason_points = explain_checkpoint(features, visibility, risk)
-    return {"risk_level": risk, "risk_score": risk_score, "safety_score": safety,
-            "reason": reason, "reason_points": reason_points}
+    return {
+        "risk_level": risk, "risk_score": risk_score, "safety_score": safety,
+        "reason": reason, "reason_points": reason_points,
+    }
 
 
 def route_recommendation(checkpoints: list[dict], worst: dict) -> dict:
     avg_safety = round(float(np.mean([p["safety_score"] for p in checkpoints])))
     max_risk = max(p["risk_score"] for p in checkpoints)
-    low_count = sum(p["risk_level"] in {"High", "Very High"} for p in checkpoints)
+    high_count = sum(p["risk_level"] in {"High", "Very High"} for p in checkpoints)
     if max_risk >= 78 or avg_safety < 35:
         decision = "Avoid Travel"
         suggestion = "Postpone the journey until weather conditions improve."
-    elif max_risk >= 58 or avg_safety < 60 or low_count:
+    elif max_risk >= 58 or avg_safety < 60 or high_count:
         decision = "Travel with Caution"
         suggestion = f"Drive slowly near {worst['place_name']} and maintain a safe distance."
     else:
         decision = "Safe to Travel"
         suggestion = "Route conditions are generally suitable. Continue to follow normal road safety rules."
 
-    positive = []
-    warnings = []
+    positive, warnings = [], []
     avg_rain = float(np.mean([p["features"]["precipitation"] for p in checkpoints]))
     avg_wind = float(np.mean([p["features"]["wind_speed"] for p in checkpoints]))
     avg_aqi = round(float(np.mean([p["features"]["aqi"] for p in checkpoints])))
     avg_visibility = float(np.mean([p["predicted_visibility_km"] for p in checkpoints]))
-    if avg_visibility >= 2: positive.append("Visibility is clear across most of the route.")
-    else: warnings.append("Visibility is reduced on parts of the route.")
-    if avg_rain <= 2: positive.append("No heavy rainfall is expected.")
-    else: warnings.append("Rain may affect road conditions.")
-    if avg_wind <= 30: positive.append("Wind speed is normal.")
-    else: warnings.append("Strong wind may affect vehicle control.")
-    if avg_aqi > 200: warnings.append("Air quality is poor; this is a health advisory, not the main road-risk factor.")
-    elif avg_aqi > 100: warnings.append("Air quality is moderate; sensitive travellers should take care.")
-    else: positive.append("Air quality is acceptable.")
+    if avg_visibility >= 2:
+        positive.append("Visibility is clear across most of the route.")
+    else:
+        warnings.append("Visibility is reduced on parts of the route.")
+    if avg_rain <= 2:
+        positive.append("No heavy rainfall is expected.")
+    else:
+        warnings.append("Rain may affect road conditions.")
+    if avg_wind <= 30:
+        positive.append("Wind speed is normal.")
+    else:
+        warnings.append("Strong wind may affect vehicle control.")
+    if avg_aqi > 200:
+        warnings.append("Air quality is poor; this is a health advisory, not the main road-risk factor.")
+    elif avg_aqi > 100:
+        warnings.append("Air quality is moderate; sensitive travellers should take care.")
+    else:
+        positive.append("Air quality is acceptable.")
 
     return {
-        "decision": decision,
-        "reason": worst["reason"],
-        "suggestion": suggestion,
-        "positive_points": positive,
-        "warning_points": warnings,
+        "decision": decision, "reason": worst["reason"], "suggestion": suggestion,
+        "positive_points": positive, "warning_points": warnings,
         "confidence_percent": round(float(np.mean([p["confidence_percent"] for p in checkpoints]))),
-        "factors": {"average_rain_mm": round(avg_rain, 2),
-                    "average_humidity_percent": round(float(np.mean([p["features"]["humidity"] for p in checkpoints])), 1),
-                    "average_aqi": avg_aqi},
+        "factors": {
+            "average_rain_mm": round(avg_rain, 2),
+            "average_humidity_percent": round(float(np.mean([p["features"]["humidity"] for p in checkpoints])), 1),
+            "average_aqi": avg_aqi,
+        },
     }
 
 
@@ -344,7 +416,11 @@ def about():
 
 @app.get("/api/health")
 def health():
-    return jsonify(status="ok", system="ML-powered travel visibility assistant", time=datetime.now().isoformat())
+    return jsonify(
+        status="ok",
+        system="ML-powered travel visibility assistant",
+        time=datetime.now().isoformat(),
+    )
 
 
 @app.get("/api/model-info")
@@ -364,7 +440,8 @@ def predict():
 def analyze_route():
     try:
         body = request.get_json(force=True)
-        source_text, destination_text = body["source"].strip(), body["destination"].strip()
+        source_text = body["source"].strip()
+        destination_text = body["destination"].strip()
         if not source_text or not destination_text:
             raise ValueError("Source and destination are required.")
         if source_text.lower() == destination_text.lower():
@@ -378,22 +455,27 @@ def analyze_route():
         checkpoints = []
         checkpoint_count = 7
         used_names = set()
+
         for i in range(checkpoint_count):
             fraction = i / (checkpoint_count - 1)
             lat = source["lat"] + (destination["lat"] - source["lat"]) * fraction
             lon = source["lon"] + (destination["lon"] - source["lon"]) * fraction
+
             features = weather(lat, lon, i, departure)
             ml_prediction = predict_one(features)
+
             if i == 0:
                 place = source["name"].split(",")[0]
             elif i == checkpoint_count - 1:
                 place = destination["name"].split(",")[0]
             else:
-                place = reverse_geocode(lat, lon, f"Route point {i + 1}")
-            # Keep duplicate names understandable by adding distance only when needed.
+                # Avoid five extra Nominatim reverse-geocoding calls per route.
+                place = f"Route checkpoint {i + 1}"
+
             if place in used_names:
-                place = f"Near {place} ({round(distance * fraction)} km)"
+                place = f"{place} ({round(distance * fraction)} km)"
             used_names.add(place)
+
             rules = safety_from_rules(features, ml_prediction["predicted_visibility_km"])
             checkpoints.append({
                 "index": i + 1, "place_name": place, "lat": lat, "lon": lon,
@@ -409,6 +491,7 @@ def analyze_route():
         risk_order = {"Low": 0, "Mild": 1, "Medium": 2, "High": 3, "Very High": 4}
         route_risk = max((p["risk_level"] for p in checkpoints), key=lambda r: risk_order[r])
         rec = route_recommendation(checkpoints, worst)
+
         vehicle = body.get("vehicle", "Car")
         speed = {"Car": 55, "Bike": 45, "Bus": 42, "Walking": 5}.get(vehicle, 50)
         duration_minutes = round(distance / speed * 60)
@@ -423,11 +506,19 @@ def analyze_route():
             "worst_checkpoint": worst, "checkpoints": checkpoints,
             "recommendation": rec,
             "model": f"{BUNDLE['visibility_model_name']} visibility prediction model",
-            "route_note": "Place names are obtained from route coordinates. The line is an approximate route and not turn-by-turn navigation.",
-            "disclaimer": "This prediction is generated using a machine learning model. Weather can change unexpectedly, so use it as travel guidance rather than a guarantee.",
+            "route_note": (
+                "Intermediate points are approximate route checkpoints. "
+                "This is a straight-line estimate, not turn-by-turn navigation."
+            ),
+            "disclaimer": (
+                "This prediction is generated using a machine learning model. "
+                "Weather can change unexpectedly, so use it as travel guidance rather than a guarantee."
+            ),
         })
     except Exception as exc:
-        return jsonify(error=str(exc)), 400
+        message = str(exc)
+        status_code = 429 if "429" in message or "Too Many Requests" in message else 400
+        return jsonify(error=message), status_code
 
 
 if __name__ == "__main__":
