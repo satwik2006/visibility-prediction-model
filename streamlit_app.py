@@ -1,5 +1,3 @@
-Python
-
 from datetime import datetime, date, time
 from pathlib import Path
 import urllib.request
